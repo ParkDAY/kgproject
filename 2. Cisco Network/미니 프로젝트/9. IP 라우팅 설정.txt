@@ -1,0 +1,35 @@
+SW1
+IP ROUTING
+int gi1/0/1
+no switchport
+no shut
+ip add 10.2.2.1 255.255.255.0
+
+int gi1/0/2
+no switchport
+no shut
+ip add 10.2.2.5 255.255.255.252
+
+int gi1/0/1
+ip add 10.2.2.1 255.255.255.252
+
+int gi1/0/2
+ip add 10.2.2.5 255.255.255.252
+
+ex
+do wr
+
+SW2
+IP ROUTING
+int gi1/0/1
+no switchport
+no shut
+ip add 10.2.2.9 255.255.255.252
+
+int gi1/0/2
+no switchport
+no shut
+ip add 10.2.2.13 255.255.255.252
+
+ex
+do wr

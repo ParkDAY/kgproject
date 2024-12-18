@@ -1,0 +1,35 @@
+INT Vlan10
+no shut
+ip add 192.168.10.3 255.255.255.0
+standby 10 ip 192.168.10.1
+ip helper-address 10.11.11.38
+exit
+
+INT Vlan20
+no shut
+ip add 172.16.0.3 255.255.0.0
+standby 20 ip 172.16.0.1
+ip helper-address 10.11.11.38
+ex
+
+INT Vlan50
+no shut
+ip add 10.20.0.2 255.255.0.0
+standby 50 ip 10.20.0.1
+ip helper-address 10.11.11.38
+exit
+
+INT Vlan90
+no shu
+ip add 10.11.11.34 255.255.255.224
+standby 90 ip 10.11.11.33
+exit
+
+do sh star
+
+interface Vlan10
+no shut
+ip add 192.168.10.3 255.255.255.0
+standby 10 ip 192.168.10.1
+ip helper-address 10.11.11.38
+exit

@@ -1,0 +1,17 @@
+int range gig1/0/1-6
+switchport mode trunk
+exit
+
+vlan 10
+name MGT
+vlan 20
+name LAN
+vlan 50
+NAME WLAN
+vlan 70
+NAME VOIP
+vlan 90
+NAME INSIDE-SERVERS
+EXIT
+
+do wr
