@@ -1,0 +1,10 @@
+int range fa0/3-24, fa0/8-24
+spanning-tree portfast
+spanning-tree bpduguard enable 
+do wr
+
+ex
+int range fa0/3-24
+spanning-tree portfast
+spanning-tree bpduguard enable 
+do wr

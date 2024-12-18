@@ -1,0 +1,35 @@
+SEACOM
+
+en
+router ospf 35
+router-id 1.1.3.3
+network 105.100.50.0 0.0.0.3 area 0
+network 105.100.50.4 0.0.0.3 area 0
+network 20.20.20.0 0.0.0.3 area 0
+ex
+do wr
+
+SAFARICOM
+
+en
+router ospf 35
+router-id 1.1.4.4
+network 30.30.30.0 0.0.0.3 area 0
+network 197.200.100.0 0.0.0.3 area 0
+network 197.200.100.4 0.0.0.3 area 0
+ex
+do wr
+
+ROUTER3(INTERNET)
+
+ex
+router ospf 35
+router-id 1.1.5.5
+network 8.0.0.0 0.255.255.255 area 0
+network 20.20.20.0 0.0.0.3 area 0
+network 30.30.30.0 0.0.0.3 area 0
+ex
+do wr
+
+end
+show ip ospf Neighbor
