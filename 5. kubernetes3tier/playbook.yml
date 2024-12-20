@@ -1,0 +1,514 @@
+# k8s-cluster.yml
+---
+- hosts: all
+  become: true
+  vars:
+    dns_servers:
+      - "8.8.8.8"
+      - "1.1.1.1"  # 이 부분을 원하는 DNS 서버로 변경하세요
+    kubernetes_version_short: "1.29"  # 원하는 Kubernetes 버전으로 변경하세요.
+  tasks:
+    # DNS Setting
+    - name: Ensure /etc/systemd/resolved.conf.d directory exists
+      file:
+        path: /etc/systemd/resolved.conf.d
+        state: directory
+        mode: '0755'
+
+    - name: Create DNS server configuration file
+      copy:
+        dest: /etc/systemd/resolved.conf.d/dns_servers.conf
+        content: |
+          [Resolve]
+          DNS={{ dns_servers }}
+
+    - name: Restart systemd-resolved service
+      systemd:
+        name: systemd-resolved
+        state: restarted
+  
+    - name: apt Install aptitude
+      apt:
+        name: aptitude
+        state: present
+        update_cache: yes
+
+    - name: update and upgrade APT packages
+      apt:
+        upgrade: yes
+        update_cache: yes
+  
+  
+    # Install CRIO Runtime
+  
+    - name: Update apt and install dependencies
+      apt:
+        name: 
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - wget
+          - git
+          - jq
+          - software-properties-common
+        state: present
+        update_cache: yes
+    
+    - name: Ensure /etc/ansible directory exists
+      file:
+        path: /etc/ansible
+        state: directory
+      ignore_errors: true
+
+    - name: Create the ansible.cfg file to Ansible
+      copy:
+        dest: /etc/ansible/ansible.cfg
+        content: |
+          #/etc/ansible/ansible.cfg
+          [defaults]
+          remote_user     = vagrant
+          ask_pass        = False
+          [privilege_escalation]
+          become          = True
+          become_method   = sudo
+          become_user     = root
+          became_ask_pass = False
+
+
+    - name: disable SWAP (Kubeadm requirement)
+      shell: |
+        swapoff -a
+            
+    - name: disable SWAP in fstab (Kubeadm requirement)
+      replace:
+        path: /etc/fstab
+        regexp: '^([^#].*?\sswap\s+sw\s+.*)$'
+        replace: '# \1'    
+            
+    - name: Ensure swap is disabled on reboot
+      cron:
+        name: "Disable swap on reboot"
+        special_time: reboot
+        job: "/sbin/swapoff -a"  
+        
+    - name: Create the .conf file to load the modules at bootup
+      copy:
+        dest: /etc/modules-load.d/k8s.conf
+        content: |
+          overlay
+          br_netfilter
+
+    - name: Load overlay module
+      modprobe:
+        name: overlay
+
+    - name: Load br_netfilter module
+      modprobe:
+        name: br_netfilter    
+
+    - name: Ensure sysctl config file exists
+      file:
+        path: /etc/sysctl.d/99-kubernetes-cri.conf
+        state: touch
+        owner: root
+        group: root
+        mode: '0644'        
+        
+    - name: Configure sysctl params for Kubernetes
+      lineinfile:
+        path: /etc/sysctl.d/99-kubernetes-cri.conf
+        line: "{{ item }}"
+        state: present
+      loop:
+        - 'net.bridge.bridge-nf-call-iptables = 1'
+        - 'net.ipv4.ip_forward = 1'
+        - 'net.bridge.bridge-nf-call-ip6tables = 1'
+
+    - name: apply sysctl params without reboot
+      command: sysctl --system
+      
+    - name: Ensure /tmp directory exists
+      file:
+        path: /tmp
+        state: directory
+
+    - name: Download Docker installation script
+      get_url:
+        url: https://get.docker.com
+        dest: /tmp/get-docker.sh
+
+    - name: Install Docker
+      command: sh /tmp/get-docker.sh
+
+    - name: Enable and start Docker service
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+
+    - name: Add user to the Docker group
+      user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: yes
+
+    - name: Get latest version of CRI-Docker
+      uri:
+        url: https://api.github.com/repos/Mirantis/cri-dockerd/releases/latest
+        return_content: yes
+      register: response
+
+    - name: Set CRI-Docker version
+      set_fact:
+        cri_docker_version: "{{ response.json.tag_name | regex_replace('^v', '') }}"
+
+    - name: Debug CRI-Docker version
+      debug:
+        msg: "Latest CRI-Docker version is {{ cri_docker_version }}"    
+    
+
+
+    - name: Download CRI-Docker
+      get_url:
+        url: "https://github.com/Mirantis/cri-dockerd/releases/download/v{{ cri_docker_version }}/cri-dockerd-{{ cri_docker_version }}.amd64.tgz"
+        dest: "/tmp/cri-dockerd-{{ cri_docker_version }}.amd64.tgz"
+
+    - name: Extract CRI-Docker
+      unarchive:
+        src: "/tmp/cri-dockerd-{{ cri_docker_version }}.amd64.tgz"
+        dest: "/tmp"
+        remote_src: yes
+
+    - name: Move CRI-Docker binary to /usr/local/bin
+      command: mv /tmp/cri-dockerd/cri-dockerd /usr/local/bin/
+
+    - name: Ensure CRI-Docker binary is executable
+      file:
+        path: /usr/local/bin/cri-dockerd
+        mode: '0755'
+        state: file
+    
+    - name: Download cri-docker service and socket files
+      get_url:
+        url: "https://raw.githubusercontent.com/Mirantis/cri-dockerd/master/packaging/systemd/cri-docker.{{ item }}"
+        dest: "/etc/systemd/system/cri-docker.{{ item }}"
+      loop:
+        - service
+        - socket
+    - name: Replace cri-dockerd path in service file
+      replace:
+        path: /etc/systemd/system/cri-docker.service
+        regexp: '/usr/bin/cri-dockerd'
+        replace: '/usr/local/bin/cri-dockerd'
+
+    - name: Reload systemd daemon
+      systemd:
+        daemon_reload: yes
+        
+    - name: Enable and start cri-dockerd service
+      systemd:
+        name: cri-docker
+        state: started
+        enabled: yes
+    
+    - name: Ensure Docker configuration directory exists
+      file:
+        path: /etc/docker
+        state: directory
+        mode: '0755'
+
+    - name: Create Docker daemon configuration file
+      copy:
+        dest: /etc/docker/daemon.json
+        content: |
+          {
+            "exec-opts": ["native.cgroupdriver=systemd"],
+            "log-driver": "json-file",
+            "log-opts": {
+              "max-size": "100m"
+            },
+            "storage-driver": "overlay2"
+          }
+
+    - name: Restart Docker service
+      systemd:
+        name: docker
+        state: restarted
+
+    - name: Restart cri-docker service
+      systemd:
+        name: cri-docker
+        state: restarted
+
+    - name: Check Docker cgroup driver
+      command: docker info
+      register: docker_info
+
+    - name: Display Docker cgroup driver
+      debug:
+        msg: "{{ docker_info.stdout_lines | select('search', 'Cgroup') | list }}"
+    
+
+    - name: create Kubernetes keyrings directory
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: 0755
+
+    - name: Download Kubernetes GPG key and save it
+      apt_key:
+        url: "https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_version_short }}/deb/Release.key"
+        state: present
+        keyring: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+    - name: Add Kubernetes APT repository
+      apt_repository:
+        repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_version_short }}/deb/ /"
+        state: present
+        filename: 'kubernetes'
+
+    - name: Install kubelet, kubeadm and kubectl
+      apt:
+        name: 
+          - kubelet
+          - kubeadm
+          - kubectl
+        state: present
+        update_cache: yes
+
+    - name: Hold kubelet, kubeadm and kubectl at current version
+      command: apt-mark hold kubelet kubeadm kubectl
+
+    - name: Get local IP address of enp0s8 interface
+      shell: >
+        ip --json a s | jq -r '.[] | if .ifname == "enp0s8" then .addr_info[] | if .family == "inet" then .local else empty end else empty end'
+      register: local_ip_output
+      become_method: sudo
+      become_user: vagrant
+      become: yes
+
+    - name: Set local IP fact
+      set_fact:
+        local_ip: "{{ local_ip_output.stdout }}"
+
+    - name: Debug local IP
+      debug:
+        msg: "Local IP of enp0s8 is {{ local_ip }}"
+    
+    - name: Create kubelet configuration file
+      copy:
+        dest: /etc/default/kubelet
+        content: |
+          KUBELET_EXTRA_ARGS=--node-ip={{ local_ip }}
+    
+    - name: Reload systemd manager configuration
+      systemd:
+        daemon_reload: yes
+      become: yes
+
+    - name: Restart kubelet service
+      systemd:
+        name: kubelet
+        state: restarted
+      become: yes
+
+- hosts: masters
+  become: yes
+  vars:
+    control_ip: "192.168.1.10"      # Control plane IP, 변경 필요
+    pod_cidr: "172.16.1.0/16"       # Pod CIDR, 변경 필요
+    service_cidr: "172.17.1.0/16"   # Service CIDR, 변경 필요
+    calico_version: "3.28.1"          # Calico version, 변경 필요
+    config_path: "/vagrant/configs"
+  tasks:
+    - name: Reset Kubernetes if already initialized
+      command: kubeadm reset -f
+      ignore_errors: true
+
+    - name: Remove etcd data directory
+      file:
+        path: /var/lib/etcd
+        state: absent
+      ignore_errors: true
+  
+    - name: Get node hostname
+      command: hostname -s
+      register: nodename
+      changed_when: false
+      
+    - name: Restart cri-docker service
+      systemd:
+        name: cri-docker
+        state: restarted
+        
+    - name: Pull kubeadm images
+      command: sudo kubeadm config images pull --cri-socket unix:///run/cri-dockerd.sock
+      become_method: sudo
+      become_user: root
+      become: yes
+
+    - name: Initialize Kubernetes master node
+      command: >
+        sudo kubeadm init
+        --apiserver-advertise-address={{ control_ip }}
+        --apiserver-cert-extra-sans={{ control_ip }}
+        --pod-network-cidr={{ pod_cidr }}
+        --service-cidr={{ service_cidr }}
+        --node-name="{{ nodename.stdout }}"
+        --cri-socket=/var/run/cri-dockerd.sock
+        --ignore-preflight-errors Swap
+        
+    - name: Create shared config directory
+      file:
+        path: "{{ config_path }}"
+        state: directory
+        mode: '0755'
+
+    - name: Generate kubeadm join command
+      # become_user: vagrant
+      command: kubeadm token create --print-join-command
+      register: join_command
+      become: yes
+
+    - name: Create join.sh script
+      copy:
+        content: |
+          {{ join_command.stdout }} --cri-socket=/var/run/cri-dockerd.sock
+        dest: "{{ config_path }}/join.sh"
+        mode: '0755'
+   
+      
+    - name: chmod 0644 admin.conf to shared config directory
+      command: sudo chmod 0644 /etc/kubernetes/admin.conf
+      become: yes 
+
+    - name: Copy admin.conf to shared config directory
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /vagrant/configs/admin.conf
+        owner: vagrant
+        group: vagrant
+        mode: '0644'
+      become: yes 
+      
+    - name: Create vagrant user's kube config directory
+      file:
+        path: "/home/vagrant/.kube"
+        state: directory
+        mode: '0755'
+        owner: vagrant
+        group: vagrant  
+
+    - name: Copy kube config to vagrant user's directory
+      copy:
+        src: /vagrant/configs/admin.conf
+        dest: /home/vagrant/.kube/config
+        owner: vagrant
+        group: vagrant
+        mode: '0644'
+      become: yes
+      
+    - name: Kubernetes proxy kubelet restart
+      command: systemctl restart kubelet 
+      register: kubelet_output
+      become_method: sudo
+      become_user: root
+      become: yes
+      changed_when: false 
+
+    - name: Install Pod Network
+      become: yes
+      become_user: vagrant
+      # shell: kubectl apply -f https://docs.projectcalico.org/manifests/calico.yaml --validate=false >> pod_network_setup.log
+      shell: kubectl apply -f /vagrant/k8s/calico.yaml --validate=false >> pod_network_setup.log
+      args:
+        chdir: /home/vagrant/
+        creates: pod_network_setup.log
+      ignore_errors: true        
+
+    - name: Install Metrics Server
+      become: yes
+      become_user: vagrant
+      shell: kubectl apply -f https://raw.githubusercontent.com/techiescamp/kubeadm-scripts/main/manifests/metrics-server.yaml --validate=false
+      args:
+        chdir: /home/vagrant/
+        creates: pod_network_setup.log
+      ignore_errors: true 
+      
+    - name: Deploy Config Map
+      become: yes
+      become_user: vagrant
+      command: kubectl apply -f ./k8s/nginx-tomcat-config-map.yaml
+      environment:
+        KUBECONFIG: /home/vagrant/.kube/config  
+      
+    - name: Deploy MySQL
+      become: yes
+      become_user: vagrant
+      command: kubectl apply -f ./k8s/mysql-deployment.yaml
+      environment:
+        KUBECONFIG: /home/vagrant/.kube/config
+
+    - name: Deploy Tomcat
+      become: yes
+      become_user: vagrant
+      command: kubectl apply -f ./k8s/tomcat-deployment.yaml
+      environment:
+        KUBECONFIG: /home/vagrant/.kube/config
+
+    - name: Deploy Nginx
+      become: yes
+      become_user: vagrant
+      command: kubectl apply -f ./k8s/nginx-deployment.yaml
+      environment:
+        KUBECONFIG: /home/vagrant/.kube/config  
+      
+      
+- hosts: workers
+  become: yes
+  tasks:
+    - name: Copy kube config to vagrant user's directory
+      copy:
+        src: /vagrant/configs/admin.conf
+        dest: /etc/kubernetes/admin.conf
+        owner: root
+        group: root
+        mode: '0644'
+      become_method: sudo
+      become_user: root
+      become: yes
+  
+    - name: Wait for join command to be available
+      wait_for:
+        path: "/vagrant/configs/join.sh"
+
+    - name: Join Kubernetes cluster
+      become: yes
+      become_method: sudo
+      become_user: root
+      shell: sh /vagrant/configs/join.sh
+      args:
+        chdir: /home/vagrant/
+        creates: join_cluster_setup.log
+      ignore_errors: true
+      
+    - name: Label node as worker
+      command: kubectl label node {{ inventory_hostname }} node-role.kubernetes.io/worker=
+      environment:
+        KUBECONFIG: "/etc/kubernetes/admin.conf"
+      delegate_to: localhost
+      become: yes
+      become_method: sudo
+      become_user: root
+
+    - name: Verify node label
+      command: kubectl get nodes {{ inventory_hostname }} --show-labels
+      environment:
+        KUBECONFIG: "/etc/kubernetes/admin.conf"
+      delegate_to: localhost
+      register: node_labels
+      
+    - name: Debug node labels
+      debug:
+        msg: "{{ node_labels.stdout }}"

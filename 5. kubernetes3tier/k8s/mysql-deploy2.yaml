@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql-db
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mysql-db
+  template:
+    metadata:
+      labels:
+        app: mysql-db
+    spec:
+      initContainers:
+        - name: init-mysql-db
+          image: mysql:8.0
+          command:
+            - sh
+            - -c
+            - |
+              echo "Running init script"
+              mysql -u root -p${MYSQL_ROOT_PASSWORD} < /docker-entrypoint-initdb.d/create-table.sql
+              echo "Init script finished"
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-secret
+                  key: DB_Password
+          volumeMounts:
+            - name: init-db-scripts
+              mountPath: /docker-entrypoint-initdb.d
+            - name: mysql-volume
+              mountPath: /var/lib/mysql
+      containers:
+        - name: mysql-db
+          image: mysql:8.0
+          ports:
+            - containerPort: 3306
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-secret
+                  key: DB_Password
+            - name: MYSQL_DATABASE
+              value: myapp
+          volumeMounts:
+            - name: mysql-volume
+              mountPath: /var/lib/mysql
+      volumes:
+        - name: init-db-scripts
+          configMap:
+            name: mysql-init-scripts
+        - name: mysql-volume
+          persistentVolumeClaim:
+            claimName: mysql-pvc

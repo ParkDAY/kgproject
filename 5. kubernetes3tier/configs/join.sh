@@ -1,0 +1,1 @@
+kubeadm join 192.168.1.10:6443 --token f78wau.qjgrg1yujk67b4qi --discovery-token-ca-cert-hash sha256:af27b42a3c72bbee319f32aeb04c7bd350902819227f4baa869a4e7c305cf445  --cri-socket=/var/run/cri-dockerd.sock
